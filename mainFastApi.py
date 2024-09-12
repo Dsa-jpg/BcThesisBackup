@@ -2,9 +2,10 @@ import os
 import requests
 import time
 from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse
 import speech_recognition as sr
-import aiohttp
+from config.settings import  OPENAI_API_KEY
+
 
 # FastAPI instance
 app = FastAPI()
@@ -13,10 +14,8 @@ app = FastAPI()
 UPLOAD_FOLDER = 'uploads'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')  # Načtení API klíče z prostředí
-
-
-async def stream_openai_api(text):
+def send_to_openai_api(text):
+    # URL OpenAI API
     url = 'https://api.openai.com/v1/chat/completions'
 
     headers = {
@@ -35,20 +34,25 @@ async def stream_openai_api(text):
                 "role": "user",
                 "content": text
             }
-        ],
-        "stream": True  # Povolení streamování odpovědi
+        ]
     }
 
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, headers=headers, json=data) as resp:
-            if resp.status != 200:
-                raise HTTPException(status_code=resp.status, detail=f"OpenAI API error: {resp.status}")
-            
-            async for chunk in resp.content.iter_chunked(1024):
-                if chunk:
-                    yield chunk.decode('utf-8')
+    start_time = time.time()
+    try:
+        response = requests.post(url, headers=headers, json=data, timeout=10)
+        api_time = time.time() - start_time
+        print(f"OpenAI API response time: {api_time:.2f} seconds")
+        if response.status_code == 200:
+            result = response.json()
+            content = result.get("choices")[0].get("message").get("content").strip()
+            return content
+        else:
+            raise HTTPException(status_code=response.status_code, detail=response.text)
+    except requests.Timeout:
+        raise HTTPException(status_code=408, detail="Request to OpenAI API timed out")
+    except requests.RequestException as e:
+        raise HTTPException(status_code=500, detail=f'Request failed: {e}')
 
-# curl --location "http://127.0.0.1:8000/upload/" --form "file=@C:\Users\Filip\Downloads\recordPetr.wav"
 @app.post("/upload/")
 async def upload_file(file: UploadFile = File(...)):
     # Validace formátu souboru
@@ -69,13 +73,17 @@ async def upload_file(file: UploadFile = File(...)):
             transcription_time = time.time() - start_time
             print(f"Speech recognition time: {transcription_time:.2f} seconds")
 
-            # Streamování odpovědi z OpenAI API
-            return StreamingResponse(stream_openai_api(text), media_type="text/plain")
+            response = send_to_openai_api(text)
+            return JSONResponse(content={
+                'message': 'File uploaded and processed successfully',
+                'file_path': file_path,
+                'transcription': text,
+                'response': response
+            })
     except sr.UnknownValueError:
         raise HTTPException(status_code=500, detail="Neslyšel jsem tě, zkus to znovu.")
     except sr.RequestError as e:
         raise HTTPException(status_code=500, detail=f"Google Speech Recognition request failed: {e}")
-
 
 if __name__ == "__main__":
     import uvicorn
