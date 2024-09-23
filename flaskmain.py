@@ -3,7 +3,9 @@ from flask import Flask, request, jsonify
 import os
 import speech_recognition as sr
 import time  # Pro měření latence
-from main import OPENAI_API_KEY
+
+
+OPENAI_API_KEY = ""
 
 app = Flask(__name__)
 
